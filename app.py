@@ -1,134 +1,148 @@
 import streamlit as st
-import pandas as pd
 import gspread
-from gspread_pandas import Spread
+import pandas as pd
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- 1. CONFIGURACIÓN DE LA PÁGINA ---
+# --- CONFIGURACIÓN DE LA PÁGINA ---
+# Usar st.set_page_config() como el primer comando de Streamlit
 st.set_page_config(
-    page_title="Calendario de Mantenciones",
-    page_icon="🗓️",
-    layout="wide"
+    page_title="Calendario de Tareas",
+    page_icon="📅",
+    layout="wide",
 )
 
-st.title("🗓️ Calendario de Mantenciones")
-st.write("Aplicación para el seguimiento de tareas de mantención de Aldo Ramos y Nicolás Ruiz.")
-
-
-# --- 2. CONEXIÓN A GOOGLE SHEETS ---
-# Se usa cache_resource para que la conexión se haga una sola vez por sesión.
-@st.cache_resource
-def connect_to_sheet():
-    """Conecta con Google Sheets usando las credenciales guardadas en st.secrets."""
+# --- CONEXIÓN CON GOOGLE SHEETS ---
+# Esta función se conecta a Google Sheets usando los "Secrets" de Streamlit
+# y devuelve el DataFrame con los datos.
+@st.cache_data(ttl=60) # Cache para no recargar los datos en cada interacción por 60s
+def load_data():
     try:
-        creds = st.secrets["gcp_service_account"]
-        client = gspread.service_account_from_dict(creds)
-        return client
-    except Exception as e:
-        st.error(f"Error de conexión con Google Sheets: {e}")
-        st.info("Asegúrate de haber configurado correctamente tu archivo 'secrets.toml'.")
-        return None
-
-
-# --- 3. CARGA DE DATOS ---
-# Se usa cache_data para recargar los datos periódicamente y no en cada interacción.
-@st.cache_data(ttl=60)  # La caché de los datos expira cada 60 segundos
-def load_data(_client, sheet_name="Calendario Mantenciones"):
-    """Carga los datos de la hoja 'Calendario Mantenciones' y los devuelve como un DataFrame."""
-    if _client is None:
-        return pd.DataFrame()
-    try:
-        spread = Spread(sheet_name, client=_client)
-        df = spread.sheet_to_df(index=False, header_rows=1)
-        # Asegurarse que las columnas importantes tengan el tipo correcto
-        df['id'] = pd.to_numeric(df['id'])
-        df['estado'] = pd.to_numeric(df['estado'])
-        df['fecha_dt'] = pd.to_datetime(df['fecha'], format='%d-%m-%y', errors='coerce')
-        return df.sort_values(by='fecha_dt').reset_index(drop=True)
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"Error: No se encontró la hoja de cálculo con el nombre '{sheet_name}'.")
-        st.info(f"Asegúrate de que el nombre sea exacto y que la hayas compartido con: {_client.auth.signer_email}")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Ocurrió un error al cargar los datos: {e}")
-        return pd.DataFrame()
-
-
-# --- 4. LÓGICA PRINCIPAL DE LA APLICACIÓN ---
-
-# Conectar y cargar los datos
-client = connect_to_sheet()
-df_tasks = load_data(client)
-
-if not df_tasks.empty:
-    # --- FILTROS EN LA BARRA LATERAL ---
-    with st.sidebar:
-        st.header("Filtros")
-        ingeniero_filtro = st.selectbox(
-            "Filtrar por Ingeniero:",
-            options=["Todos"] + sorted(df_tasks["ingeniero"].unique().tolist())
+        # Define los alcances (scopes) necesarios para la API
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        
+        # Carga las credenciales desde los Secrets de Streamlit
+        # st.secrets["gcp_service_account"] es donde guardaste el contenido del JSON
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=scopes,
         )
-        # Convertir 0 y 1 a texto legible para el filtro
-        estado_map = {0: "Pendiente", 1: "Completada"}
-        estado_filtro_text = st.selectbox(
-            "Filtrar por Estado:",
-            options=["Todos", "Pendiente", "Completada"]
-        )
+        client = gspread.authorize(creds)
+        
+        # Abre la hoja de cálculo por su URL
+        sheet_url = "https://docs.google.com/spreadsheets/d/1UGNaLGrqJ3KMCCEXnxzPfDhcLooDTIhAj-UFUI0UNRo"
+        spreadsheet = client.open_by_url(sheet_url)
+        
+        # Selecciona la hoja por su nombre (asegúrate que se llame 'Hoja 1')
+        sheet = spreadsheet.worksheet("Hoja 1")
+        
+        # Obtiene todos los datos y los convierte a un DataFrame de Pandas
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Convierte la columna 'fecha' a formato de fecha para poder ordenarla
+        df['fecha'] = pd.to_datetime(df['fecha'], format='%d-%m-%y')
+        
+        return df
+    except Exception as e:
+        # Si hay un error (ej. Secrets no configurados), muestra un mensaje amigable
+        st.error(f"Error al cargar los datos desde Google Sheets: {e}")
+        st.info("Asegúrate de haber configurado correctamente los 'Secrets' en Streamlit Cloud y de haber compartido la hoja de cálculo con el email de servicio.")
+        return pd.DataFrame() # Devuelve un DataFrame vacío en caso de error
 
-    # --- APLICAR FILTROS ---
-    df_filtered = df_tasks.copy()
-    if ingeniero_filtro != "Todos":
-        df_filtered = df_filtered[df_filtered["ingeniero"] == ingeniero_filtro]
+# Carga los datos al iniciar la app
+df = load_data()
 
-    if estado_filtro_text != "Todos":
-        estado_val = 0 if estado_filtro_text == "Pendiente" else 1
-        df_filtered = df_filtered[df_filtered["estado"] == estado_val]
+# --- INTERFAZ DE LA APLICACIÓN ---
 
-    # --- MOSTRAR LAS TAREAS ---
-    st.write(f"#### Mostrando {len(df_filtered)} de {len(df_tasks)} tareas totales")
+st.title("📅 Calendario de Tareas de Ingeniería")
+st.markdown("Aplicación para visualizar y registrar las tareas del equipo.")
 
-    if df_filtered.empty:
-        st.info("No hay tareas que coincidan con los filtros seleccionados.")
+if not df.empty:
+    # --- FILTROS ---
+    st.sidebar.header("Filtros")
+    
+    # Filtro por ingeniero
+    ingenieros = df['ingeniero'].unique()
+    selected_ingeniero = st.sidebar.multiselect('Filtrar por Ingeniero:', ingenieros, default=ingenieros)
+    
+    # Filtro por rango de fechas
+    min_date = df['fecha'].min().date()
+    max_date = df['fecha'].max().date()
+    selected_date_range = st.sidebar.date_input(
+        'Filtrar por Fecha:',
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+    
+    # Aplicar filtros al DataFrame
+    # Asegurarse que el rango de fechas tenga dos valores
+    if len(selected_date_range) == 2:
+        start_date, end_date = selected_date_range
+        # Convertir fechas a datetime para comparar
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        
+        df_filtered = df[
+            (df['ingeniero'].isin(selected_ingeniero)) &
+            (df['fecha'] >= start_datetime) &
+            (df['fecha'] <= end_datetime)
+        ]
     else:
-        for index, row in df_filtered.iterrows():
-            is_completed = (row['estado'] == 1)
-            # Definir color del borde según el estado
-            border_color = "border-green-500" if is_completed else "border-yellow-500"
+        df_filtered = df[df['ingeniero'].isin(selected_ingeniero)]
 
-            with st.container(border=True):
-                col1, col2 = st.columns([4, 1])
 
-                with col1:
-                    st.markdown(f"**{row['tarea']}** (ID: {row['id']})")
-                    st.caption(
-                        f"Asignado a: {row['ingeniero']} | Fecha: {row['fecha']} | Frecuencia: {row['frecuencia']}")
+    # --- VISUALIZACIÓN DE DATOS ---
+    st.markdown("### Vista de Tareas Programadas")
+    
+    # Formatear la columna de fecha para mostrarla sin la hora
+    df_display = df_filtered.copy()
+    df_display['fecha'] = df_display['fecha'].dt.strftime('%d-%m-%Y')
+    
+    # Mostrar el DataFrame filtrado
+    st.dataframe(df_display.sort_values(by="fecha", ascending=False), use_container_width=True)
 
-                with col2:
-                    if is_completed:
-                        st.success("✅ Completada", icon="✅")
-                    else:
-                        if st.button("Marcar como completada", key=f"btn_{row['id']}", type="primary"):
-                            try:
-                                # Conectar a la hoja para actualizar
-                                worksheet = client.open("Calendario Mantenciones").sheet1
+    # --- AGREGAR NUEVO REGISTRO ---
+    st.markdown("---")
+    with st.expander("📝 Agregar Nueva Tarea"):
+        with st.form("new_task_form", clear_on_submit=True):
+            # Obtiene el último ID y suma 1 para el nuevo registro
+            next_id = df['id'].max() + 1
+            
+            # Columnas para el formulario
+            col1, col2 = st.columns(2)
+            with col1:
+                ingeniero = st.selectbox("Ingeniero", options=ingenieros)
+                fecha = st.date_input("Fecha de la Tarea")
+            with col2:
+                tarea = st.text_area("Descripción de la Tarea")
+            
+            submitted = st.form_submit_button("Guardar Tarea")
 
-                                # Encontrar la celda de la columna 'id' que coincide
-                                cell = worksheet.find(str(row['id']), in_column=1)
+            if submitted:
+                # Formatea la fecha al formato de la hoja de cálculo (dd-mm-yy)
+                formatted_date = fecha.strftime("%d-%m-%y")
+                # Crea la nueva fila
+                new_row = [next_id, ingeniero, tarea, formatted_date]
+                
+                # Agrega la fila a la hoja de cálculo
+                try:
+                    # Conexión dentro del formulario para asegurar que esté fresca
+                    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+                    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+                    client = gspread.authorize(creds)
+                    sheet_url = "https://docs.google.com/spreadsheets/d/1UGNaLGrqJ3KMCCEXnxzPfDhcLooDTIhAj-UFUI0UNRo"
+                    spreadsheet = client.open_by_url(sheet_url)
+                    sheet = spreadsheet.worksheet("Hoja 1")
+                    sheet.append_row(new_row)
+                    
+                    st.success("¡Tarea agregada exitosamente!")
+                    # Invalida el caché para que los datos se recarguen
+                    st.cache_data.clear()
+                    # st.experimental_rerun() # Descomentar si la tabla no se actualiza sola
+                except Exception as e:
+                    st.error(f"Error al guardar la tarea: {e}")
 
-                                if cell:
-                                    # Actualizar la celda de la columna 'estado' (columna 6)
-                                    worksheet.update_cell(cell.row, 6, 1)  # 1 = Completada
-                                    st.toast(f"Tarea {row['id']} marcada como completada.")
-
-                                    # Limpiar la caché y re-ejecutar para ver el cambio
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                else:
-                                    st.error(f"No se encontró el ID {row['id']} en la hoja.")
-
-                            except Exception as e:
-                                st.error(f"No se pudo actualizar la hoja: {e}")
-
-# --- 5. EJECUTAR LA APLICACIÓN ---
-# Para correr tu aplicación, abre una terminal en la carpeta del proyecto y ejecuta:
-# streamlit run app.py
+else:
+    st.warning("No se pudieron cargar los datos. Verifica la conexión y la configuración.")
