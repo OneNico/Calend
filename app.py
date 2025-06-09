@@ -318,8 +318,9 @@ def create_charts(df):
     )
     
     # Gráfico de tendencia mensual
-    df['mes'] = df['fecha_dt'].dt.strftime('%Y-%m')
-    monthly_tasks = df.groupby('mes').size().reset_index(name='cantidad')
+    df_copy = df.copy()
+    df_copy['mes'] = df_copy['fecha_dt'].dt.strftime('%Y-%m')
+    monthly_tasks = df_copy.groupby('mes').size().reset_index(name='cantidad')
     
     fig_trend = px.line(
         monthly_tasks,
@@ -472,11 +473,11 @@ def main():
             with col1:
                 fig_eng, _, fig_status = create_charts(filtered_df)
                 if fig_status:
-                    st.plotly_chart(fig_status, use_container_width=True)
+                    st.plotly_chart(fig_status, use_container_width=True, key="dashboard_status")
             
             with col2:
                 if fig_eng:
-                    st.plotly_chart(fig_eng, use_container_width=True)
+                    st.plotly_chart(fig_eng, use_container_width=True, key="dashboard_engineer")
     
     # TAB 2: TAREAS ACTUALES
     with tab2:
@@ -595,13 +596,13 @@ def main():
             
             with col1:
                 if fig_eng:
-                    st.plotly_chart(fig_eng, use_container_width=True)
+                    st.plotly_chart(fig_eng, use_container_width=True, key="analysis_engineer")
                 if fig_status:
-                    st.plotly_chart(fig_status, use_container_width=True)
+                    st.plotly_chart(fig_status, use_container_width=True, key="analysis_status")
             
             with col2:
                 if fig_trend:
-                    st.plotly_chart(fig_trend, use_container_width=True)
+                    st.plotly_chart(fig_trend, use_container_width=True, key="analysis_trend")
                 
                 # Tabla de resumen por ingeniero
                 st.markdown("#### 👨‍🔧 Resumen por Ingeniero")
