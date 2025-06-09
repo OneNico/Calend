@@ -53,7 +53,12 @@ def load_data_from_google_sheet():
         df = pd.DataFrame(data)
         
         # Convertir la columna de fecha a formato datetime
-        df['fecha_dt'] = pd.to_datetime(df['fecha'], format='%d-%m-%y')
+        if 'fecha' in df.columns:
+            df['fecha_dt'] = pd.to_datetime(df['fecha'], format='%d-%m-%y')
+        else:
+            st.error("Error crítico: La columna 'fecha' no se encuentra en el Google Sheet.")
+            df['fecha_dt'] = pd.to_datetime(datetime.now())
+
         return df
 
     except Exception as e:
@@ -65,9 +70,9 @@ def load_data_from_google_sheet():
 def get_task_status(task):
     """ Determina el estado de una tarea: Completada, Vencida o Pendiente. """
     today = datetime.now().date()
-    task_date = task['fecha_dt'].date()
+    task_date = task.get('fecha_dt').date() if pd.notna(task.get('fecha_dt')) else today
     
-    if task['id'] in st.session_state.completed_ids:
+    if task.get('id') in st.session_state.completed_ids:
         return "Completada"
     if task_date < today:
         return "Vencida"
@@ -79,43 +84,36 @@ def handle_complete_task(task_id):
 
 # --- 4. RENDERIZADO DE LA INTERFAZ ---
 
-# Cargar CSS y datos
 load_css()
 tasks_df = load_data_from_google_sheet()
 
-# Encabezado de la aplicación
 st.markdown('<h1 class="text-3xl md:text-4xl font-bold text-gray-700" style="text-align: center;">Calendario de Mantenciones</h1>', unsafe_allow_html=True)
 st.markdown('<p class="text-lg text-gray-500" style="text-align: center;">Año 2025</p>', unsafe_allow_html=True)
 st.write("---")
 
-# Crear pestañas de navegación
 tab_semana_actual, tab_registro = st.tabs(["Semana Actual", "Registro de Tareas"])
 
-# Pestaña 1: Semana Actual
 with tab_semana_actual:
     st.header("Tareas Programadas y Vencidas")
 
     if tasks_df.empty:
-        st.warning("No se pudieron cargar las tareas.")
+        st.warning("No se pudieron cargar las tareas o la hoja está vacía.")
     else:
-        # Calcular fechas de la semana actual (Lunes a Domingo)
         today = datetime.now().date()
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
 
-        # Filtrar tareas: Vencidas o de la semana actual, y que no estén completadas
         tasks_to_show = []
-        for _, task in tasks_df.iterrows():
+        for _, task_row in tasks_df.iterrows():
+            task = task_row.to_dict()
             status = get_task_status(task)
-            if status != "Completada" and (status == "Vencida" or (start_of_week <= task['fecha_dt'].date() <= end_of_week)):
-                task_with_status = task.to_dict()
-                task_with_status['estado'] = status
-                tasks_to_show.append(task_with_status)
+            task_date = task.get('fecha_dt').date() if pd.notna(task.get('fecha_dt')) else today
+            if status != "Completada" and (status == "Vencida" or (start_of_week <= task_date <= end_of_week)):
+                task['estado'] = status
+                tasks_to_show.append(task)
         
-        # Ordenar por fecha
-        tasks_to_show.sort(key=lambda x: x['fecha_dt'])
+        tasks_to_show.sort(key=lambda x: x.get('fecha_dt', datetime.now()))
 
-        # Encabezado de la tabla
         cols = st.columns((2, 2, 2, 2, 2, 2))
         headers = ["Fecha", "Cliente", "Responsable", "Tipo", "Estado", "Acción"]
         for col, header in zip(cols, headers):
@@ -123,39 +121,39 @@ with tab_semana_actual:
         
         st.markdown("---")
 
-        # Filas de la tabla
         if not tasks_to_show:
             st.info("No hay tareas pendientes o vencidas para esta semana.")
         else:
             for task in tasks_to_show:
-                status_class = task['estado'].lower()
+                status_class = task.get('estado', 'pendiente').lower()
                 cols = st.columns((2, 2, 2, 2, 2, 2))
-                cols[0].write(task['fecha_dt'].strftime('%d-%m-%Y'))
-                cols[1].write(task['cliente'])
-                cols[2].write(task['ingeniero'])
-                cols[3].write(task['tipo'])
-                cols[4].markdown(f'<span class="status-tag status-{status_class}">{task["estado"]}</span>', unsafe_allow_html=True)
+                cols[0].write(task.get('fecha_dt').strftime('%d-%m-%Y') if pd.notna(task.get('fecha_dt')) else "Sin fecha")
                 
-                # Botón de acción en la última columna
-                button_pressed = cols[5].button("Completar", key=f"complete_{task['id']}")
-                if button_pressed:
-                    handle_complete_task(task['id'])
-                    st.toast(f"Tarea '{task['tarea']}' marcada como completada.", icon="🎉")
-                    st.rerun() # Recargar la página para reflejar el cambio
+                # ===== LÍNEAS CORREGIDAS =====
+                cols[1].write(task.get('cliente', 'N/A'))  # No fallará si 'cliente' no existe
+                cols[2].write(task.get('ingeniero', 'N/A'))# No fallará si 'ingeniero' no existe
+                cols[3].write(task.get('tipo', 'N/A'))     # No fallará si 'tipo' no existe
+                # =============================
+                
+                cols[4].markdown(f'<span class="status-tag status-{status_class}">{task.get("estado", "Pendiente")}</span>', unsafe_allow_html=True)
+                
+                task_id = task.get('id', None)
+                if task_id:
+                    button_pressed = cols[5].button("Completar", key=f"complete_{task_id}")
+                    if button_pressed:
+                        handle_complete_task(task_id)
+                        st.toast(f"Tarea '{task.get('tarea', task_id)}' marcada como completada.", icon="🎉")
+                        st.rerun()
 
-
-# Pestaña 2: Registro de Tareas
 with tab_registro:
     st.header("Historial de Tareas Completadas")
 
     if not st.session_state.completed_ids:
         st.info("Aún no se ha completado ninguna tarea.")
     else:
-        # Filtrar el DataFrame para obtener solo las tareas completadas
         completed_tasks_df = tasks_df[tasks_df['id'].isin(st.session_state.completed_ids)].copy()
         completed_tasks_df.sort_values(by='fecha_dt', ascending=False, inplace=True)
 
-        # Encabezado de la tabla de registro
         cols = st.columns((2, 2, 2, 2, 2))
         headers = ["Fecha", "Cliente", "Responsable", "Tipo", "Estado"]
         for col, header in zip(cols, headers):
@@ -163,11 +161,15 @@ with tab_registro:
         
         st.markdown("---")
 
-        # Filas de la tabla de registro
-        for _, task in completed_tasks_df.iterrows():
+        for _, task_row in completed_tasks_df.iterrows():
+            task = task_row.to_dict()
             cols = st.columns((2, 2, 2, 2, 2))
-            cols[0].write(task['fecha_dt'].strftime('%d-%m-%Y'))
-            cols[1].write(task['cliente'])
-            cols[2].write(task['ingeniero'])
-            cols[3].write(task['tipo'])
+            cols[0].write(task.get('fecha_dt').strftime('%d-%m-%Y') if pd.notna(task.get('fecha_dt')) else "Sin fecha")
+            
+            # ===== LÍNEAS CORREGIDAS =====
+            cols[1].write(task.get('cliente', 'N/A'))
+            cols[2].write(task.get('ingeniero', 'N/A'))
+            cols[3].write(task.get('tipo', 'N/A'))
+            # =============================
+            
             cols[4].markdown('<span class="status-tag status-completada">Completada</span>', unsafe_allow_html=True)
