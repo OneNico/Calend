@@ -226,8 +226,11 @@ def load_data_from_google_sheet():
 
 # --- 4. FUNCIONES DE ANÁLISIS Y PERSISTENCIA (MODIFICADAS) ---
 
+# REEMPLAZA LA FUNCIÓN ORIGINAL CON ESTA VERSIÓN MEJORADA
 def update_task_status_in_sheets(task_id, status, completion_date=None):
-    """Actualiza el estado de una tarea directamente en Google Sheets"""
+    """
+    Actualiza el estado de una tarea directamente en Google Sheets de forma robusta.
+    """
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
@@ -235,19 +238,24 @@ def update_task_status_in_sheets(task_id, status, completion_date=None):
         sheet_url = "https://docs.google.com/spreadsheets/d/1UGNaLGrqJ3KMCCEXnxzPfDhcLooDTIhAj-UFUI0UNRo"
         spreadsheet = client.open_by_url(sheet_url)
         sheet = spreadsheet.worksheet("Hoja 1")
-        
-        # Buscar la fila por el 'id' de la tarea. Se asume que la columna 'id' es la primera (A)
-        id_list = sheet.col_values(1)
-        # Empezar en 2 porque la fila 1 es el header
-        for i, current_id in enumerate(id_list[1:], start=2):
-            if str(current_id) == str(task_id):
-                # Columna G: estado, Columna H: fecha_completa
-                sheet.update(f'G{i}', status) 
-                if completion_date:
-                    sheet.update(f'H{i}', completion_date.strftime('%d-%m-%y'))
-                return True
-        
-        return False
+
+        # Usar sheet.find() para localizar la celda con el ID de la tarea. Es más robusto.
+        # Se busca en la primera columna (columna 'id').
+        cell = sheet.find(str(task_id), in_column=1)
+
+        if cell:
+            # Actualizar la columna de estado (G) y fecha (H) en la misma fila encontrada.
+            # La columna G es la 7ma, la H es la 8va.
+            # IMPORTANTE: El valor se envuelve en una lista de listas: [[valor]]
+            sheet.update_cell(cell.row, 7, status)
+            if completion_date:
+                sheet.update_cell(cell.row, 8, completion_date.strftime('%d-%m-%y'))
+            return True
+        else:
+            # Si no se encuentra el ID, se informa el error.
+            st.error(f"No se encontró una tarea con el ID {task_id} en la base de datos.")
+            return False
+
     except Exception as e:
         st.error(f"Error al actualizar Google Sheets: {e}")
         return False
