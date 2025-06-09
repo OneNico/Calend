@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import calendar
 
-# --- 1. CONFIGURACIÓN DE PÁGINA E INICIALIZACIÓN ---
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 
 st.set_page_config(
     page_title="Sistema de Gestión de Mantenciones",
@@ -16,11 +16,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inicializar el estado de la sesión
-if "completed_ids" not in st.session_state:
-    st.session_state.completed_ids = set()
+# NOTA: Se ha eliminado st.session_state.completed_ids para usar Google Sheets como única fuente de verdad.
 
-# --- 2. ESTILOS MEJORADOS ---
+# --- 2. ESTILOS MEJORADOS (Sin cambios) ---
 
 def load_enhanced_css():
     """Estilos CSS mejorados para una interfaz más moderna"""
@@ -198,7 +196,7 @@ def load_enhanced_css():
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. CARGA DE DATOS (mejorada) ---
+# --- 3. CARGA DE DATOS ---
 
 @st.cache_data(ttl=300)
 def load_data_from_google_sheet():
@@ -226,10 +224,10 @@ def load_data_from_google_sheet():
         st.error(f"Error al cargar los datos: {e}")
         return pd.DataFrame()
 
-# --- 4. FUNCIONES DE ANÁLISIS Y PERSISTENCIA ---
+# --- 4. FUNCIONES DE ANÁLISIS Y PERSISTENCIA (MODIFICADAS) ---
 
 def update_task_status_in_sheets(task_id, status, completion_date=None):
-    """Actualiza el estado de una tarea en Google Sheets"""
+    """Actualiza el estado de una tarea directamente en Google Sheets"""
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
@@ -238,14 +236,15 @@ def update_task_status_in_sheets(task_id, status, completion_date=None):
         spreadsheet = client.open_by_url(sheet_url)
         sheet = spreadsheet.worksheet("Hoja 1")
         
-        # Encontrar la fila de la tarea
-        all_records = sheet.get_all_records()
-        for i, record in enumerate(all_records, start=2):  # Empezar en fila 2
-            if str(record.get('id')) == str(task_id):
-                # Actualizar columna de estado (necesitarías agregar esta columna)
-                sheet.update(f'G{i}', status)  # Asumiendo que la columna G es para estado
+        # Buscar la fila por el 'id' de la tarea. Se asume que la columna 'id' es la primera (A)
+        id_list = sheet.col_values(1)
+        # Empezar en 2 porque la fila 1 es el header
+        for i, current_id in enumerate(id_list[1:], start=2):
+            if str(current_id) == str(task_id):
+                # Columna G: estado, Columna H: fecha_completa
+                sheet.update(f'G{i}', status) 
                 if completion_date:
-                    sheet.update(f'H{i}', completion_date.strftime('%d-%m-%y'))  # Columna H para fecha completada
+                    sheet.update(f'H{i}', completion_date.strftime('%d-%m-%y'))
                 return True
         
         return False
@@ -254,46 +253,48 @@ def update_task_status_in_sheets(task_id, status, completion_date=None):
         return False
 
 def get_task_status(task):
-    """Determina el estado de una tarea"""
+    """Determina el estado de una tarea basándose únicamente en los datos de la BDD."""
     today = datetime.now().date()
-    task_date = task.get('fecha_dt').date() if pd.notna(task.get('fecha_dt')) else today
+    # La columna 'fecha_dt' ya es un objeto datetime
+    task_date = task['fecha_dt'].date() if pd.notna(task['fecha_dt']) else None
     
-    # Primero verificar si tiene estado en la base de datos
+    # El estado en la BDD es la única fuente de verdad para 'Completada'
     if task.get('estado') == 'Completada':
         return "Completada"
     
-    # Luego verificar estado local de la sesión
-    if task.get('id') in st.session_state.completed_ids:
-        return "Completada"
-    
-    if task_date < today:
+    # Si no está completada, se calcula si está Vencida o Pendiente
+    if task_date and task_date < today:
         return "Vencida"
+    
     return "Pendiente"
 
 def calculate_metrics(df):
-    """Calcula métricas del dashboard"""
-    today = datetime.now().date()
+    """Calcula métricas del dashboard directamente desde el dataframe."""
+    if df.empty:
+        return {'total': 0, 'completadas': 0, 'vencidas': 0, 'pendientes': 0}
+    
     total_tasks = len(df)
+    today = datetime.now().date()
     
-    completed = len(st.session_state.completed_ids)
+    # Contar completadas directamente desde la columna 'estado'
+    completadas = df[df['estado'] == 'Completada'].shape[0]
     
-    vencidas = 0
-    pendientes = 0
+    # Filtrar las no completadas para calcular pendientes y vencidas
+    not_completed_df = df[df['estado'] != 'Completada'].copy()
     
-    for _, task in df.iterrows():
-        task_dict = task.to_dict()
-        status = get_task_status(task_dict)
-        if status == "Vencida":
-            vencidas += 1
-        elif status == "Pendiente":
-            pendientes += 1
+    # Asegurarse de que la fecha no sea NaT antes de comparar
+    valid_dates_df = not_completed_df.dropna(subset=['fecha_dt'])
+    
+    vencidas = valid_dates_df[valid_dates_df['fecha_dt'].dt.date < today].shape[0]
+    pendientes = valid_dates_df[valid_dates_df['fecha_dt'].dt.date >= today].shape[0]
     
     return {
         'total': total_tasks,
-        'completadas': completed,
+        'completadas': completadas,
         'vencidas': vencidas,
         'pendientes': pendientes
     }
+
 
 def create_charts(df):
     """Crea gráficos para el dashboard"""
@@ -331,7 +332,7 @@ def create_charts(df):
     )
     fig_trend.update_layout(height=400)
     
-    # Gráfico circular de estados
+    # Gráfico circular de estados (ahora usa las métricas correctas)
     metrics = calculate_metrics(df)
     status_data = pd.DataFrame({
         'Estado': ['Completadas', 'Vencidas', 'Pendientes'],
@@ -344,13 +345,18 @@ def create_charts(df):
         values='Cantidad',
         names='Estado',
         title="Distribución de Estados",
-        color_discrete_sequence=['#27ae60', '#e74c3c', '#f39c12']
+        color='Estado',
+        color_discrete_map={
+            'Completadas': '#27ae60',
+            'Vencidas': '#e74c3c',
+            'Pendientes': '#f39c12'
+        }
     )
     fig_status.update_layout(height=400)
     
     return fig_engineer, fig_trend, fig_status
 
-# --- 5. INTERFAZ PRINCIPAL ---
+# --- 5. INTERFAZ PRINCIPAL (MODIFICADA) ---
 
 def main():
     load_enhanced_css()
@@ -389,8 +395,10 @@ def main():
         
         # Rango de fechas
         st.markdown("### 📅 Rango de Fechas")
-        date_from = st.date_input("Desde:", datetime.now().date() - timedelta(days=30))
-        date_to = st.date_input("Hasta:", datetime.now().date() + timedelta(days=30))
+        min_date = tasks_df['fecha_dt'].min().date()
+        max_date = tasks_df['fecha_dt'].max().date()
+        date_from = st.date_input("Desde:", min_date)
+        date_to = st.date_input("Hasta:", max_date)
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -404,10 +412,12 @@ def main():
     if selected_type != 'Todos':
         filtered_df = filtered_df[filtered_df['tipo'] == selected_type]
     
-    filtered_df = filtered_df[
-        (filtered_df['fecha_dt'].dt.date >= date_from) & 
-        (filtered_df['fecha_dt'].dt.date <= date_to)
-    ]
+    # Filtrar por fecha solo si la columna fecha_dt no tiene nulos
+    if filtered_df['fecha_dt'].notna().all():
+        filtered_df = filtered_df[
+            (filtered_df['fecha_dt'].dt.date >= date_from) & 
+            (filtered_df['fecha_dt'].dt.date <= date_to)
+        ]
     
     # Tabs principales
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -458,7 +468,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        # Alertas importantes
         if metrics['vencidas'] > 0:
             st.markdown(f"""
             <div class="custom-alert alert-warning">
@@ -466,35 +475,27 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        # Gráficos rápidos
         if not filtered_df.empty:
             col1, col2 = st.columns(2)
-            
+            fig_eng, _, fig_status = create_charts(filtered_df)
             with col1:
-                fig_eng, _, fig_status = create_charts(filtered_df)
                 if fig_status:
                     st.plotly_chart(fig_status, use_container_width=True, key="dashboard_status")
-            
             with col2:
                 if fig_eng:
                     st.plotly_chart(fig_eng, use_container_width=True, key="dashboard_engineer")
-    
-    # TAB 2: TAREAS ACTUALES
+
+    # TAB 2: TAREAS ACTUALES (Lógica de botón modificada)
     with tab2:
         st.markdown("### 📋 Tareas Pendientes y Vencidas")
-        
-        today = datetime.now().date()
-        start_of_week = today - timedelta(days=today.weekday())
-        end_of_week = start_of_week + timedelta(days=6)
         
         tasks_to_show = []
         for _, task_row in filtered_df.iterrows():
             task = task_row.to_dict()
             status = get_task_status(task)
-            task_date = task.get('fecha_dt').date() if pd.notna(task.get('fecha_dt')) else today
             
-            if status != "Completada" and (status == "Vencida" or (start_of_week <= task_date <= end_of_week)):
-                task['estado'] = status
+            if status != "Completada":
+                task['status_calculado'] = status
                 tasks_to_show.append(task)
         
         tasks_to_show.sort(key=lambda x: x.get('fecha_dt', datetime.now()))
@@ -502,11 +503,10 @@ def main():
         if not tasks_to_show:
             st.markdown("""
             <div class="custom-alert alert-info">
-                ℹ️ No hay tareas pendientes o vencidas para mostrar en el período seleccionado.
+                ℹ️ No hay tareas pendientes o vencidas para mostrar con los filtros seleccionados.
             </div>
             """, unsafe_allow_html=True)
         else:
-            # Mostrar tabla mejorada
             for i, task in enumerate(tasks_to_show):
                 with st.container():
                     col1, col2, col3, col4, col5, col6 = st.columns([1.5, 2, 2, 1.5, 1.5, 1])
@@ -518,9 +518,9 @@ def main():
                     col3.write(f"👨‍🔧 {task.get('ingeniero', 'N/A')}")
                     col4.write(f"🔧 {task.get('tipo', 'N/A')}")
                     
-                    status = task.get('estado', 'Pendiente')
+                    status = task.get('status_calculado', 'Pendiente')
                     status_class = status.lower()
-                    icon = "⏰" if status == "Pendiente" else "🚨" if status == "Vencida" else "✅"
+                    icon = "⏰" if status == "Pendiente" else "🚨"
                     
                     col5.markdown(f"""
                     <span class="status-badge status-{status_class}">
@@ -529,12 +529,8 @@ def main():
                     """, unsafe_allow_html=True)
                     
                     task_id = task.get('id', None)
-                    if task_id and status != "Completada":
+                    if task_id:
                         if col6.button("✅ Completar", key=f"complete_{task_id}", type="primary"):
-                            # Guardar en sesión local inmediatamente
-                            st.session_state.completed_ids.add(task_id)
-                            
-                            # Intentar guardar en Google Sheets
                             with st.spinner("Guardando en base de datos..."):
                                 success = update_task_status_in_sheets(
                                     task_id, 
@@ -543,48 +539,47 @@ def main():
                                 )
                             
                             if success:
-                                st.success(f"✅ Tarea completada y guardada en la base de datos!")
-                                # Limpiar cache para recargar datos actualizados
+                                st.success(f"✅ Tarea ID {task_id} guardada en la base de datos.")
+                                # Limpiar cache y refrescar la app para ver el cambio
                                 st.cache_data.clear()
+                                st.rerun()
                             else:
-                                st.warning("⚠️ Tarea marcada localmente, pero no se pudo guardar en la base de datos.")
-                            
-                            st.rerun()
-                    
+                                st.error("⚠️ No se pudo guardar el cambio en la base de datos.")
+                                
                     if i < len(tasks_to_show) - 1:
                         st.divider()
-    
-    # TAB 3: COMPLETADAS
+
+    # TAB 3: COMPLETADAS (Lógica modificada)
     with tab3:
         st.markdown("### ✅ Historial de Tareas Completadas")
         
-        if not st.session_state.completed_ids:
+        # Filtrar tareas que tienen el estado "Completada" en la BDD
+        completed_tasks_df = filtered_df[filtered_df['estado'] == 'Completada'].copy()
+        
+        if completed_tasks_df.empty:
             st.markdown("""
             <div class="custom-alert alert-info">
-                ℹ️ Aún no se han completado tareas en esta sesión.
+                ℹ️ No hay tareas completadas para mostrar según los filtros seleccionados.
             </div>
             """, unsafe_allow_html=True)
         else:
-            completed_tasks_df = filtered_df[filtered_df['id'].isin(st.session_state.completed_ids)].copy()
+            completed_tasks_df = completed_tasks_df.sort_values(by='fecha_dt', ascending=False)
             
-            if not completed_tasks_df.empty:
-                completed_tasks_df = completed_tasks_df.sort_values(by='fecha_dt', ascending=False)
-                
-                for _, task_row in completed_tasks_df.iterrows():
-                    task = task_row.to_dict()
-                    with st.container():
-                        col1, col2, col3, col4, col5 = st.columns([1.5, 2, 2, 1.5, 1.5])
-                        
-                        fecha_str = task.get('fecha_dt').strftime('%d/%m/%Y') if pd.notna(task.get('fecha_dt')) else "Sin fecha"
-                        
-                        col1.write(f"📅 **{fecha_str}**")
-                        col2.write(f"🏢 {task.get('cliente', 'N/A')}")
-                        col3.write(f"👨‍🔧 {task.get('ingeniero', 'N/A')}")
-                        col4.write(f"🔧 {task.get('tipo', 'N/A')}")
-                        col5.markdown('<span class="status-badge status-completada">✅ Completada</span>', unsafe_allow_html=True)
-                        
-                        st.divider()
-    
+            for _, task_row in completed_tasks_df.iterrows():
+                task = task_row.to_dict()
+                with st.container():
+                    col1, col2, col3, col4, col5 = st.columns([1.5, 2, 2, 1.5, 1.5])
+                    
+                    fecha_str = task.get('fecha_dt').strftime('%d/%m/%Y') if pd.notna(task.get('fecha_dt')) else "Sin fecha"
+                    
+                    col1.write(f"📅 **{fecha_str}**")
+                    col2.write(f"🏢 {task.get('cliente', 'N/A')}")
+                    col3.write(f"👨‍🔧 {task.get('ingeniero', 'N/A')}")
+                    col4.write(f"🔧 {task.get('tipo', 'N/A')}")
+                    col5.markdown('<span class="status-badge status-completada">✅ Completada</span>', unsafe_allow_html=True)
+                    
+                    st.divider()
+
     # TAB 4: ANÁLISIS
     with tab4:
         st.markdown("### 📈 Análisis y Reportes")
@@ -604,49 +599,38 @@ def main():
                 if fig_trend:
                     st.plotly_chart(fig_trend, use_container_width=True, key="analysis_trend")
                 
-                # Tabla de resumen por ingeniero
                 st.markdown("#### 👨‍🔧 Resumen por Ingeniero")
-                engineer_summary = filtered_df.groupby('ingeniero').agg({
-                    'id': 'count',
-                    'cliente': 'nunique',
-                    'fecha_dt': ['min', 'max']
-                }).round(2)
-                
-                engineer_summary.columns = ['Total Tareas', 'Clientes Únicos', 'Primera Tarea', 'Última Tarea']
+                engineer_summary = filtered_df.groupby('ingeniero').agg(
+                    Total_Tareas=('id', 'count'),
+                    Clientes_Unicos=('cliente', 'nunique')
+                ).reset_index()
                 st.dataframe(engineer_summary, use_container_width=True)
-    
+
     # TAB 5: CALENDARIO
     with tab5:
         st.markdown("### 📅 Vista de Calendario")
         
-        # Selector de mes
         col1, col2 = st.columns(2)
         with col1:
-            selected_year = st.selectbox("Año:", [2024, 2025, 2026], index=1)
+            selected_year = st.selectbox("Año:", sorted(filtered_df['fecha_dt'].dt.year.unique()), index=0)
         with col2:
             selected_month = st.selectbox("Mes:", range(1, 13), 
-                                        index=datetime.now().month-1,
-                                        format_func=lambda x: calendar.month_name[x])
+                                          index=datetime.now().month-1,
+                                          format_func=lambda x: calendar.month_name[x])
         
-        # Filtrar tareas del mes seleccionado
         month_tasks = filtered_df[
             (filtered_df['fecha_dt'].dt.year == selected_year) & 
             (filtered_df['fecha_dt'].dt.month == selected_month)
         ]
         
         if not month_tasks.empty:
-            # Crear calendario visual
             cal = calendar.monthcalendar(selected_year, selected_month)
-            
             st.markdown(f"#### {calendar.month_name[selected_month]} {selected_year}")
             
-            # Agrupar tareas por día
             daily_tasks = month_tasks.groupby(month_tasks['fecha_dt'].dt.day).size()
             
-            # Mostrar calendario
             days_of_week = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
             cols = st.columns(7)
-            
             for i, day in enumerate(days_of_week):
                 cols[i].markdown(f"**{day}**")
             
@@ -671,7 +655,7 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
         else:
-            st.info(f"No hay tareas programadas para {calendar.month_name[selected_month]} {selected_year}")
+            st.info(f"No hay tareas programadas para {calendar.month_name[selected_month]} {selected_year} con los filtros actuales.")
 
 if __name__ == "__main__":
     main()
