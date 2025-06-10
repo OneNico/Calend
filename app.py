@@ -6,12 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from pathlib import Path
 
-# --- 0. CARGA DE TAILWIND Y ESTILOS PERSONALIZADOS ---
-st.markdown("<script src='https://cdn.tailwindcss.com'></script>", unsafe_allow_html=True)
-css = Path("styles.css").read_text()
-st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN DE PÁGINA (primera llamada a Streamlit) ---
 st.set_page_config(
     page_title="Sistema de Gestión de Mantenciones",
     page_icon="🔧",
@@ -19,7 +14,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. CARGA DE DATOS ---
+# --- 2. CARGA DE TAILWIND Y ESTILOS PERSONALIZADOS ---
+st.markdown("<script src='https://cdn.tailwindcss.com'></script>", unsafe_allow_html=True)
+css = Path("styles.css").read_text()
+st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+# --- 3. CARGA DE DATOS ---
 @st.cache_data(ttl=300)
 def load_data_from_google_sheet():
     try:
@@ -40,7 +40,7 @@ def load_data_from_google_sheet():
         st.error(f"Error al cargar datos: {e}")
         return pd.DataFrame()
 
-# --- 3. FUNCIONES AUXILIARES ---
+# --- 4. FUNCIONES AUXILIARES ---
 def update_task_status_in_sheets(task_id, status, completion_date=None):
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -90,7 +90,7 @@ def create_charts(df):
     fig_status.update_layout(height=350, template="streamlit")
     return fig_eng, fig_status
 
-# --- 4. INTERFAZ PRINCIPAL ---
+# --- 5. INTERFAZ PRINCIPAL ---
 def main():
     df = load_data_from_google_sheet()
     if df.empty:
@@ -105,7 +105,8 @@ def main():
     """, unsafe_allow_html=True)
 
     tabs = st.tabs(["📋 Tareas", "📊 Dashboard", "✅ Registro"])
-    # TAB 1
+
+    # TAB 1: TAREAS PENDIENTES
     with tabs[0]:
         pendientes = [r.to_dict() for _,r in df.iterrows() if get_task_status(r) != "Completada"]
         if not pendientes:
@@ -128,7 +129,7 @@ def main():
                             st.experimental_rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-    # TAB 2
+    # TAB 2: DASHBOARD
     with tabs[1]:
         m = calculate_metrics(df)
         c1,c2,c3,c4 = st.columns(4)
@@ -146,11 +147,11 @@ def main():
             """, unsafe_allow_html=True)
         if m['vencidas']>0:
             st.markdown('<div class="custom-alert alert-warning">⚠️ Hay tareas vencidas.</div>', unsafe_allow_html=True)
-        fig_e, fig_s = create_charts(df)
+        fig_s, fig_e = create_charts(df)
         st.plotly_chart(fig_s, use_container_width=True)
         st.plotly_chart(fig_e, use_container_width=True)
 
-    # TAB 3
+    # TAB 3: REGISTRO
     with tabs[2]:
         comp = df[df['estado']=="Completada"].sort_values('fecha_dt', ascending=False)
         if comp.empty:
