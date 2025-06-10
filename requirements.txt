@@ -3,3 +3,4 @@ pandas
 gspread
 gspread-pandas
 plotly.express
+streamlit-calendar
