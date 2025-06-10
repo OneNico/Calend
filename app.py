@@ -184,7 +184,7 @@ def load_professional_css():
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. CARGA DE DATOS ---
+# --- 3. CARGA DE DATOS (Sin cambios) ---
 @st.cache_data(ttl=300)
 def load_data_from_google_sheet():
     try:
@@ -206,7 +206,7 @@ def load_data_from_google_sheet():
         st.error(f"Error al cargar los datos: {e}")
         return pd.DataFrame()
 
-# --- 4. FUNCIONES DE ANÁLISIS Y PERSISTENCIA ---
+# --- 4. FUNCIONES DE ANÁLISIS Y PERSISTENCIA (Sin cambios) ---
 def update_task_status_in_sheets(task_id, status, completion_date=None):
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -240,33 +240,24 @@ def get_task_status(task):
 def calculate_metrics(df):
     if df.empty:
         return {'total': 0, 'completadas': 0, 'vencidas': 0, 'pendientes': 0}
-    
     total_tasks = len(df)
     today = datetime.now().date()
-    
     completadas = df[df['estado'] == 'Completada'].shape[0]
-    
     not_completed_df = df[df['estado'] != 'Completada'].copy()
     valid_dates_df = not_completed_df.dropna(subset=['fecha_dt'])
-    
     vencidas = valid_dates_df[valid_dates_df['fecha_dt'].dt.date < today].shape[0]
     pendientes = valid_dates_df[valid_dates_df['fecha_dt'].dt.date >= today].shape[0]
-    
     return {'total': total_tasks, 'completadas': completadas, 'vencidas': vencidas, 'pendientes': pendientes}
 
 def create_charts(df):
     if df.empty:
         return None, None
-    
-    # Gráfico de tareas por ingeniero
     tasks_by_engineer = df['ingeniero'].value_counts()
     fig_engineer = px.bar(
         x=tasks_by_engineer.values, y=tasks_by_engineer.index,
         orientation='h', title="Tareas por Ingeniero"
     )
     fig_engineer.update_layout(height=350, xaxis_title=None, yaxis_title=None)
-    
-    # Gráfico circular de estados
     metrics = calculate_metrics(df)
     status_data = pd.DataFrame({
         'Estado': ['Completadas', 'Vencidas', 'Pendientes'],
@@ -281,51 +272,37 @@ def create_charts(df):
         }
     )
     fig_status.update_layout(height=350, legend_title=None)
-    
-    # Adaptar gráficos al tema de Streamlit
     fig_engineer.update_layout(template="streamlit")
     fig_status.update_layout(template="streamlit")
-    
     return fig_engineer, fig_status
 
-# --- 5. INTERFAZ PRINCIPAL ---
+# --- 5. INTERFAZ PRINCIPAL (MODIFICADA CON NUEVO DISEÑO) ---
 def main():
     load_professional_css()
-    
     st.markdown("""
     <div class="main-header">
         <h1><span style="font-size: 2.5rem;">🔧</span> Sistema de Gestión de Mantenciones</h1>
         <p>Monitoreo y control de tareas de mantenimiento - 2025</p>
     </div>
     """, unsafe_allow_html=True)
-    
     tasks_df = load_data_from_google_sheet()
-    
     if tasks_df.empty:
         st.error("No se pudieron cargar los datos. Verifica la conexión con Google Sheets.")
         return
-    
     filtered_df = tasks_df.copy()
-    
     tab1, tab2, tab3 = st.tabs([
         "📋 Tareas Actuales", "📊 Dashboard", "✅ Registro"
     ])
-    
-    # TAB 1: TAREAS ACTUALES
     with tab1:
         st.header("Tareas Pendientes y Vencidas")
-        st.write("") # Espacio
-        
         tasks_to_show = [row.to_dict() for _, row in filtered_df.iterrows() if get_task_status(row.to_dict()) != "Completada"]
         tasks_to_show.sort(key=lambda x: x.get('fecha_dt', datetime.now()))
-        
         if not tasks_to_show:
             st.markdown('<div class="custom-alert alert-info">ℹ️ ¡Excelente! No hay tareas pendientes o vencidas.</div>', unsafe_allow_html=True)
         else:
             for task in tasks_to_show:
                 st.markdown('<div class="task-card">', unsafe_allow_html=True)
                 col1, col2, col3 = st.columns([4, 2, 1.5])
-                
                 with col1:
                     fecha_str = task.get('fecha_dt').strftime('%d/%m/%Y') if pd.notna(task.get('fecha_dt')) else "N/A"
                     st.markdown(f"""
@@ -334,37 +311,28 @@ def main():
                             📅 {fecha_str} &nbsp; • &nbsp; 👨‍🔧 {task.get('ingeniero', 'N/A')} &nbsp; • &nbsp; 🔧 {task.get('tipo', 'N/A')}
                         </small>
                     """, unsafe_allow_html=True)
-                
                 status = get_task_status(task)
                 status_class = status.lower()
                 icon = {"Pendiente": "⏰", "Vencida": "🚨"}.get(status, "")
                 with col2:
                     st.markdown(f'<div style="text-align: right; padding-top: 10px;"><span class="status-badge status-{status_class}">{icon} {status}</span></div>', unsafe_allow_html=True)
-                
                 task_id = task.get('id', None)
                 if task_id:
                     with col3:
-                        # Botón centrado verticalmente
-                        st.write("") # Placeholder
+                        st.write("") 
                         if st.button("Marcar Completada", key=f"complete_{task_id}", type="primary", use_container_width=True):
                             with st.spinner("Actualizando..."):
                                 success = update_task_status_in_sheets(task_id, "Completada", datetime.now().date())
-                                if success:
-                                    st.success(f"Tarea ID {task_id} completada.")
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                else:
-                                    st.error("No se pudo actualizar.")
-                
+                            if success:
+                                st.success(f"Tarea ID {task_id} completada.")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("No se pudo actualizar.")
                 st.markdown('</div>', unsafe_allow_html=True)
-
-    # TAB 2: DASHBOARD
     with tab2:
         st.header("Resumen Ejecutivo")
-        st.write("") # Espacio
-        
         metrics = calculate_metrics(filtered_df)
-        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.markdown(f"""
@@ -390,30 +358,19 @@ def main():
                 <p class="metric-number" style="color: var(--danger-color);">{metrics['vencidas']}</p>
                 <p class="metric-label">Vencidas</p>
             </div>""", unsafe_allow_html=True)
-            
-        st.write(""); st.write("") # Espacio
-
         if metrics['vencidas'] > 0:
             st.markdown(f'<div class="custom-alert alert-warning">⚠️ <strong>Atención:</strong> Hay {metrics["vencidas"]} tareas vencidas que requieren acción inmediata.</div>', unsafe_allow_html=True)
-        
         if not filtered_df.empty:
             st.header("Visualizaciones")
             col1, col2 = st.columns(2)
             fig_eng, fig_status = create_charts(filtered_df)
             with col1:
-                if fig_status:
-                    st.plotly_chart(fig_status, use_container_width=True)
+                if fig_status: st.plotly_chart(fig_status, use_container_width=True)
             with col2:
-                if fig_eng:
-                    st.plotly_chart(fig_eng, use_container_width=True)
-
-    # TAB 3: REGISTRO
+                if fig_eng: st.plotly_chart(fig_eng, use_container_width=True)
     with tab3:
         st.header("Registro de Tareas Completadas")
-        st.write("") # Espacio
-        
         completed_tasks_df = filtered_df[filtered_df['estado'] == 'Completada'].copy()
-        
         if completed_tasks_df.empty:
             st.markdown('<div class="custom-alert alert-info">ℹ️ Aún no hay tareas completadas en el registro.</div>', unsafe_allow_html=True)
         else:
@@ -421,7 +378,6 @@ def main():
             for _, task in completed_tasks_df.iterrows():
                 st.markdown('<div class="task-card">', unsafe_allow_html=True)
                 col1, col2 = st.columns([4, 2])
-                
                 with col1:
                     fecha_str = task.get('fecha_dt').strftime('%d/%m/%Y') if pd.notna(task.get('fecha_dt')) else "N/A"
                     st.markdown(f"""
@@ -430,10 +386,8 @@ def main():
                             📅 {fecha_str} &nbsp; • &nbsp; 👨‍🔧 {task.get('ingeniero', 'N/A')} &nbsp; • &nbsp; 🔧 {task.get('tipo', 'N/A')}
                         </small>
                     """, unsafe_allow_html=True)
-                
                 with col2:
                     st.markdown('<div style="text-align: right; padding-top: 10px;"><span class="status-badge status-completada">✅ Completada</span></div>', unsafe_allow_html=True)
-
                 st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
