@@ -874,4 +874,4 @@ def main():
 
 if __name__ == "__main__":
 
-    main() quiero que en vez de verse asi, se vea un calendario de la semana en cuestion en grande y las tareas que hay por cada dia y su estado y responzable en tarjetasd dentro. En la aprte superior derecha quiero un calendario del ems mas chico que muestre las tareas mas chiquitas que hay por dia.
+    main() 
